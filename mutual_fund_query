@@ -1,0 +1,92 @@
+
+with reg as
+(    select user_id,
+            date(registration_import_datatime) as reg_date
+    from stockbit_bibit_pst_dataset1
+),
+
+pr as
+(    select ds2.user_id,
+           ds2.date as trans_date,
+           coalesce(ds2.saham_invested_amount,0) as saham,
+           coalesce(ds2.campuran_invested_amount, 0) as campuran,
+           coalesce(ds2.pasar_uang_invested_amount, 0) as puang,
+           coalesce(ds2.pendapatan_tetap_invested_amount, 0) as ptetap,
+           coalesce(ds2.saham_invested_amount, 0) - coalesce(lag(ds2.saham_invested_amount) over(partition by ds2.user_id),0) as next_BS_saham,
+           coalesce(ds2.campuran_invested_amount, 0) - coalesce(lag(ds2.campuran_invested_amount) over(partition by ds2.user_id),0) as next_BS_camp,
+           coalesce(ds2.pasar_uang_invested_amount, 0) - coalesce(lag(ds2.pasar_uang_invested_amount) over(partition by ds2.user_id),0) as next_BS_puang,
+           coalesce(ds2.pendapatan_tetap_invested_amount, 0) - coalesce(lag(ds2.pendapatan_tetap_invested_amount) over(partition by ds2.user_id),0) as next_BS_ptetap
+    from stockbit_bibit_pst_dataset2 as ds2),
+trtable as 
+(    select *
+    from pr
+    where next_bs_saham != 0 or
+          next_bs_camp != 0 or
+          next_bs_puang != 0 or
+          next_bs_ptetap != 0 
+),
+anchor as
+(    
+    select  t.user_id, 
+            t.trans_date,
+            t.saham,
+            t.campuran,
+            t.puang,
+            t.next_bs_saham,
+            t.next_bs_camp,
+            t.next_bs_puang,
+            t.next_bs_ptetap,
+            reg.reg_date
+    from trtable as t
+    left join reg
+    on t.user_id = reg.user_id
+),
+cohort_items as
+(    
+    select user_id,
+           date(date_trunc('week',min(trans_date))) as f
+    from anchor
+    group by 1
+    order by 2 asc
+),
+user_activities as
+(
+    select ci.user_id,
+           floor((a.trans_date - ci.f)/7) as week_number
+    from cohort_items as ci
+    left join anchor as a
+    on ci.user_id = a.user_id
+    order by 2 desc
+),
+cohort_size as
+(    
+    select f,
+       count(user_id) as num_users        
+    from cohort_items
+    group by 1
+    order by 1 asc
+),
+
+retention_table as
+(    select ci.f as cohort_week,
+           ua.week_number,
+           count(distinct ua.user_id) as num_users
+    from user_activities as ua
+    left join cohort_items as ci
+    on ua.user_id = ci.user_id
+    group by 1,2
+    order by 1,2 asc
+)
+
+select rt.cohort_week,
+       cs.num_users as cohort_size,
+       rt.week_number,       
+       rt.num_users as total_users,
+       cast(rt.num_users as decimal)/cs.num_users as percentage
+from retention_table as rt
+left join cohort_size as cs
+on rt.cohort_week = cs.f
+order by 1,3
+
+
+
