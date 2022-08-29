@@ -1,0 +1,49 @@
+-- # creating table containing user_id and the first time the user login to the game
+with first_play as
+(
+    select user_id,
+            min(date(ts)) as cohort_day
+    from toucten
+    group by 1
+),
+-- # creating table containing user_id and the day_number from a join table of toucten and first_play
+user_activity as
+(
+    select tou.user_id as users,
+            (date(date_trunc('day',tou.ts)) - date(date_trunc('day',fp.cohort_day))) as day_number
+    from toucten as tou
+    left join first_play as fp
+    on tou.user_id = fp.user_id
+    group by 1,2
+),
+-- #creating table containing the day of the cohort and the number of users for everyday of the cohort
+cohort_size as
+(
+    select cohort_day,
+            count(user_id) as num_users
+    from first_play
+    group by 1
+    order by 1
+),
+--# creating table containing the cohort day, day_number, and number of users for every day_number
+retention_table as
+(
+select fp.cohort_day,
+        ua.day_number,
+        count(ua.users) as num_users
+from user_activity as ua
+left join first_play as fp
+on ua.users = fp.user_id
+group by 1,2
+order by 1
+)
+
+select rt.cohort_day,
+        cs.num_users as cohort_size,
+        rt.day_number,
+        rt.num_users as total_users,
+        cast(rt.num_users as decimal)/cs.num_users as percentage
+from retention_table as rt
+left join cohort_size as cs
+on rt.cohort_day = cs.cohort_day
+order by 1,3
